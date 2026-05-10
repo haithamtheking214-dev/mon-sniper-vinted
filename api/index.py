@@ -1,99 +1,133 @@
 from flask import Flask, render_template_string, request, jsonify
 import requests
+import time
 
 app = Flask(__name__)
 
-# MOTEUR DE RECHERCHE VINTED
-def get_vinted(query, pmax):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
-    }
-    try:
-        session = requests.Session()
-        # On simule une visite sur la home pour chopper les cookies
-        session.get("https://www.vinted.fr", headers=headers, timeout=5)
-        
-        api_url = f"https://www.vinted.fr/api/v2/catalog/items?search_text={query}&price_to={pmax}&order=newest_first&per_page=12"
-        r = session.get(api_url, headers=headers, timeout=5)
-        
-        if r.status_code == 200:
-            items = r.json().get('items', [])
-            return [{
-                "title": i.get('title'),
-                "price": i.get('price', {}).get('amount'),
-                "img": i.get('photo', {}).get('url') if i.get('photo') else "",
-                "url": f"https://www.vinted.fr{i.get('url')}",
-                "brand": i.get('brand_title')
-            } for i in items]
-    except Exception as e:
-        print(f"Erreur: {e}")
-    return []
+class VintedEngine:
+    def __init__(self):
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept-Language': 'fr-FR,fr;q=0.9',
+        }
 
-# INTERFACE NEON BLUE
-UI_TEMPLATE = """
+    def fetch_items(self, q, pmin, pmax, status):
+        session = requests.Session()
+        try:
+            # Bypass simple des cookies
+            session.get("https://www.vinted.fr", headers=self.headers, timeout=10)
+            url = f"https://www.vinted.fr/api/v2/catalog/items?search_text={q}&order=newest_first"
+            if pmin: url += f"&price_from={pmin}"
+            if pmax: url += f"&price_to={pmax}"
+            if status: url += f"&status_ids={status}"
+            
+            r = session.get(url, headers=self.headers, timeout=10)
+            if r.status_code == 200:
+                return r.json().get('items', [])
+            return {"error": f"Vinted Status {r.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+engine = VintedEngine()
+
+HTML_PRO = """
 <!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdn.tailwindcss.com"></script>
-    <title>V-SNIPER CLOUD</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
     <style>
-        body { background: #050505; color: white; font-family: 'Inter', sans-serif; }
-        .neon-border { border: 1px solid #00f2fe; box-shadow: 0 0 10px rgba(0, 242, 254, 0.2); }
-        .cyan-text { color: #00f2fe; }
-        .bg-cyan { background: #00f2fe; }
+        body { background: #020202; color: #fff; font-family: 'Inter', sans-serif; display: flex; height: 100vh; overflow: hidden; }
+        .sidebar { width: 300px; background: #080808; border-right: 1px solid #151515; padding: 30px; display: flex; flex-direction: column; }
+        .accent { color: #00e1ff; text-shadow: 0 0 10px rgba(0, 225, 255, 0.3); }
+        .bg-accent { background: #00e1ff; }
+        .panel { background: #0a0a0a; border: 1px solid #151515; border-radius: 15px; }
+        .item-card { background: #0d0d0d; border: 1px solid #1a1a1a; transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1); border-radius: 12px; }
+        .item-card:hover { border-color: #00e1ff; transform: translateY(-5px); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        input, select { background: #000 !important; border: 1px solid #222 !important; color: white !important; font-size: 13px !important; }
+        input:focus { border-color: #00e1ff !important; outline: none; }
+        .nav-link { color: #555; padding: 12px; border-radius: 8px; transition: 0.2s; display: flex; align-items: center; gap: 10px; font-size: 14px; }
+        .nav-link.active { background: rgba(0, 225, 255, 0.05); color: #00e1ff; }
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-thumb { background: #222; border-radius: 10px; }
     </style>
 </head>
-<body class="p-4 md:p-10">
-    <div class="max-w-6xl mx-auto">
-        <header class="flex justify-between items-center mb-10">
-            <h1 class="text-3xl font-black italic">V-SNIPER<span class="cyan-text">.</span></h1>
-            <div class="flex gap-2">
-                <input id="brand" placeholder="Marque..." class="bg-zinc-900 border border-zinc-800 p-2 rounded-lg outline-none focus:border-cyan-400 text-sm">
-                <input id="price" type="number" placeholder="Prix Max" class="bg-zinc-900 border border-zinc-800 p-2 rounded-lg outline-none focus:border-cyan-400 text-sm w-24">
-                <button onclick="startScan()" class="bg-cyan text-black font-bold px-4 py-2 rounded-lg text-sm hover:scale-105 transition">SCAN</button>
+<body>
+    <div class="sidebar">
+        <h1 class="text-3xl font-black italic accent mb-10 tracking-tighter uppercase">V-SNIPER</h1>
+        <div class="space-y-2 flex-1">
+            <div class="nav-link active"><i class="fas fa-search"></i> Sniper Live</div>
+            <div class="nav-link"><i class="fas fa-bolt"></i> Auto-Buy <span class="text-[8px] bg-red-600 text-white px-1 rounded ml-auto">PRO</span></div>
+            <div class="nav-link"><i class="fas fa-history"></i> Historique</div>
+            <div class="nav-link"><i class="fas fa-cog"></i> Configuration</div>
+        </div>
+        <div class="mt-auto panel p-4">
+            <p class="text-[10px] text-zinc-500 uppercase font-bold mb-2">Statut Système</p>
+            <div class="flex items-center gap-2 text-[10px]">
+                <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                VERCEL_CLOUD_ACTIVE
+            </div>
+        </div>
+    </div>
+
+    <div class="flex-1 flex flex-col">
+        <header class="p-6 border-b border-zinc-900 bg-black/50 backdrop-blur-xl">
+            <div class="max-w-5xl flex gap-4">
+                <input id="q" placeholder="Recherche (ex: Nike Nocta)..." class="flex-1 p-3 rounded-xl">
+                <input id="pmax" type="number" placeholder="Prix Max" class="w-28 p-3 rounded-xl">
+                <select id="status" class="w-44 p-3 rounded-xl">
+                    <option value="">Tous états</option>
+                    <option value="6">Neuf avec étiquette</option>
+                    <option value="1">Neuf</option>
+                    <option value="2">Très bon état</option>
+                </select>
+                <button onclick="scan()" class="bg-accent text-black font-black px-10 py-3 rounded-xl uppercase hover:scale-105 transition active:scale-95">Scanner</button>
             </div>
         </header>
 
-        <div id="loader" class="hidden text-center cyan-text animate-pulse mb-5">Recherche de pépites en cours...</div>
-        
-        <div id="grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            <!-- Les articles arrivent ici -->
+        <div id="grid" class="flex-1 overflow-y-auto p-10 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+            <div class="col-span-full text-center py-40 opacity-10">
+                <i class="fas fa-satellite-dish text-8xl mb-6"></i>
+                <h2 class="text-2xl font-bold uppercase tracking-widest">En attente de cible</h2>
+            </div>
         </div>
     </div>
 
     <script>
-        async function startScan() {
-            const b = document.getElementById('brand').value;
-            const p = document.getElementById('price').value;
-            const loader = document.getElementById('loader');
+        async function scan() {
             const grid = document.getElementById('grid');
-
-            if(!b) return alert("Choisis une marque !");
+            grid.innerHTML = '<div class="col-span-full text-center py-40"><p class="accent animate-bounce text-xl font-black uppercase tracking-widest">Scanning Vinted Network...</p></div>';
             
-            loader.classList.remove('hidden');
+            const q = document.getElementById('q').value;
+            const pmax = document.getElementById('pmax').value;
+            const status = document.getElementById('status').value;
+            
             try {
-                const r = await fetch(`/api/items?q=${b}&p=${p}`);
+                const r = await fetch(`/api/scan?q=${q}&pmax=${pmax}&status=${status}`);
                 const data = await r.json();
                 
+                if (data.error) {
+                    grid.innerHTML = `<div class="col-span-full text-red-500 text-center p-10 panel">${data.error}</div>`;
+                    return;
+                }
+
                 grid.innerHTML = data.map(i => `
-                    <div class="bg-zinc-900 rounded-xl overflow-hidden neon-border transition hover:-translate-y-1">
-                        <img src="${i.img}" class="w-full h-48 object-cover">
-                        <div class="p-4">
-                            <p class="text-[10px] text-gray-500 uppercase">${i.brand}</p>
-                            <h3 class="font-bold truncate text-sm mb-2">${i.title}</h3>
-                            <div class="flex justify-between items-center">
-                                <span class="cyan-text font-black">${i.price}€</span>
-                                <a href="${i.url}" target="_blank" class="bg-white text-black text-[10px] px-3 py-1 rounded font-black uppercase">Voir</a>
-                            </div>
+                    <div class="item-card flex flex-col p-2">
+                        <div class="relative rounded-xl overflow-hidden mb-3">
+                            <img src="${i.photo?.url}" class="w-full h-52 object-cover">
+                            <div class="absolute top-2 right-2 bg-black/90 px-3 py-1 rounded-lg text-xs font-black accent border border-accent/20">${i.price?.amount}€</div>
+                        </div>
+                        <div class="p-2 flex flex-col flex-1">
+                            <p class="text-[9px] text-zinc-600 uppercase font-bold mb-1">${i.brand_title}</p>
+                            <h3 class="text-xs truncate font-semibold text-zinc-300 mb-4">${i.title}</h3>
+                            <a href="https://www.vinted.fr${i.url}" target="_blank" class="mt-auto block w-full bg-white text-black text-center py-2 rounded-lg font-black text-[10px] uppercase hover:bg-cyan-400 transition">Snipe Offer</a>
                         </div>
                     </div>
                 `).join('');
-            } catch (e) {
-                alert("Erreur lors du scan");
+            } catch(e) {
+                grid.innerHTML = '<div class="col-span-full text-red-500 text-center p-10 panel">Erreur de connexion.</div>';
             }
-            loader.classList.add('hidden');
         }
     </script>
 </body>
@@ -101,15 +135,15 @@ UI_TEMPLATE = """
 """
 
 @app.route('/')
-def index():
-    return render_template_string(UI_TEMPLATE)
+def home():
+    return render_template_string(HTML_PRO)
 
-@app.route('/api/items')
-def api_items():
-    query = request.args.get('q', 'Nike')
-    price = request.args.get('p', '100')
-    items = get_vinted(query, price)
-    return jsonify(items)
+@app.route('/api/scan')
+def scan():
+    q = request.args.get('q', 'Nike')
+    pmax = request.args.get('pmax', '')
+    status = request.args.get('status', '')
+    items = engine.fetch_items(q, None, pmax, status)
+    return jsonify(items if isinstance(items, list) else {"error": items.get('error')})
 
-# TRES IMPORTANT POUR VERCEL
 app = app
